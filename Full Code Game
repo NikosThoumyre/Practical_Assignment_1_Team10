@@ -1,0 +1,526 @@
+import pygame
+import sys
+import random
+import math
+import time
+from pygame.locals import *
+
+# Initialize pygame
+pygame.init()
+pygame.font.init()
+
+# Get screen dimensions
+info = pygame.display.Info()
+SCREEN_WIDTH, SCREEN_HEIGHT = info.current_w, info.current_h
+
+# Colors
+BG_COLOR = (240, 240, 240)
+TEXT_COLOR = (50, 50, 50)
+BUTTON_COLOR = (70, 130, 180)
+BUTTON_HOVER_COLOR = (100, 150, 200)
+CHAIN_COLOR = (70, 70, 70)
+PLAYER_COLORS = [(220, 60, 60), (60, 120, 220)]  # User, AI
+
+# Fonts
+TITLE_FONT = pygame.font.SysFont('Arial', 50, bold=True)
+MAIN_FONT = pygame.font.SysFont('Arial', 36)
+SMALL_FONT = pygame.font.SysFont('Arial', 28)
+RULES_FONT = pygame.font.SysFont('Arial', 32)
+
+# Game Tree Implementation
+class GameTreeNode:
+    def __init__(self, chain, player_score, ai_score, is_maximizing, move=None, parent=None):
+        self.chain = chain.copy()
+        self.player_score = player_score
+        self.ai_score = ai_score
+        self.is_maximizing = is_maximizing
+        self.move = move
+        self.parent = parent
+        self.children = []
+        self.value = None
+        
+    def add_child(self, child_node):
+        self.children.append(child_node)
+        
+    def is_terminal(self):
+        return len(self.chain) == 0
+
+class GameTree:
+    def __init__(self, root_node):
+        self.root = root_node
+        self.current_node = root_node
+        self.nodes = [root_node]
+    
+    def add_node(self, node, parent=None):
+        if parent is None:
+            parent = self.current_node
+        parent.add_child(node)
+        node.parent = parent
+        self.nodes.append(node)
+        return node
+    
+    def prune_tree(self, keep_depth=3):
+        if len(self.nodes) > keep_depth * 20:
+            self.nodes = self.nodes[-keep_depth * 10:]
+
+class Button:
+    def __init__(self, x, y, width, height, text, action=None):
+        self.rect = pygame.Rect(x, y, width, height)
+        self.text = text
+        self.action = action
+        self.is_hovered = False
+        
+    def draw(self, surface):
+        color = BUTTON_HOVER_COLOR if self.is_hovered else BUTTON_COLOR
+        pygame.draw.rect(surface, color, self.rect, border_radius=5)
+        pygame.draw.rect(surface, (255, 255, 255), self.rect, 2, border_radius=5)
+        
+        text_surf = MAIN_FONT.render(self.text, True, (255, 255, 255))
+        text_rect = text_surf.get_rect(center=self.rect.center)
+        surface.blit(text_surf, text_rect)
+        
+    def check_hover(self, pos):
+        self.is_hovered = self.rect.collidepoint(pos)
+        
+    def handle_event(self, event):
+        if event.type == MOUSEBUTTONDOWN and self.is_hovered and self.action:
+            self.action()
+
+class ChainElement:
+    def __init__(self, value, x, y):
+        self.value = value
+        self.rect = pygame.Rect(x, y, 60, 60)
+        self.is_hovered = False
+        self.is_selected = False
+        
+    def draw(self, surface):
+        color = (255, 200, 0) if self.is_selected else (255, 255, 255) if self.is_hovered else (200, 230, 255)
+        pygame.draw.rect(surface, color, self.rect, border_radius=5)
+        pygame.draw.rect(surface, CHAIN_COLOR, self.rect, 2, border_radius=5)
+        
+        text_surf = MAIN_FONT.render(str(self.value), True, CHAIN_COLOR)
+        text_rect = text_surf.get_rect(center=self.rect.center)
+        surface.blit(text_surf, text_rect)
+        
+    def check_hover(self, pos):
+        self.is_hovered = self.rect.collidepoint(pos)
+        return self.is_hovered
+
+class AIPlayer:
+    def __init__(self):
+        self.nodes_evaluated = 0
+        self.game_tree = None
+    
+    def get_move(self, chain, user_score, ai_score):
+        start_time = time.time()
+        self.nodes_evaluated = 0
+        
+        root_node = GameTreeNode(chain, user_score, ai_score, True)
+        self.game_tree = GameTree(root_node)
+        
+        depth = min(6, len(chain))
+        _, best_move = self.minimax(root_node, depth, -math.inf, math.inf, True)
+        
+        self.game_tree.prune_tree()
+        
+        end_time = time.time()
+        print(f"AI evaluated {self.nodes_evaluated} nodes in {end_time - start_time:.2f} seconds")
+        return best_move if best_move is not None else random.randint(0, len(chain)-1)
+    
+    def minimax(self, node, depth, alpha, beta, maximizing_player):
+        self.nodes_evaluated += 1
+        
+        if depth == 0 or node.is_terminal():
+            node.value = self.evaluate(node)
+            return node.value, None
+        
+        best_move = None
+        if maximizing_player:
+            max_eval = -math.inf
+            for i in range(len(node.chain)):
+                new_chain = node.chain[:i] + node.chain[i+1:]
+                new_ai_score = node.ai_score - node.chain[i]
+                child = GameTreeNode(new_chain, node.player_score, new_ai_score, False, i, node)
+                self.game_tree.add_node(child)
+                
+                eval, _ = self.minimax(child, depth-1, alpha, beta, False)
+                
+                if eval > max_eval:
+                    max_eval = eval
+                    best_move = i
+                
+                alpha = max(alpha, eval)
+                if beta <= alpha:
+                    break
+            
+            node.value = max_eval
+            return max_eval, best_move
+        else:
+            min_eval = math.inf
+            for i in range(len(node.chain)):
+                new_chain = node.chain[:i] + node.chain[i+1:]
+                new_player_score = node.player_score - node.chain[i]
+                child = GameTreeNode(new_chain, new_player_score, node.ai_score, True, i, node)
+                self.game_tree.add_node(child)
+                
+                eval, _ = self.minimax(child, depth-1, alpha, beta, True)
+                
+                if eval < min_eval:
+                    min_eval = eval
+                    best_move = i
+                
+                beta = min(beta, eval)
+                if beta <= alpha:
+                    break
+            
+            node.value = min_eval
+            return min_eval, best_move
+    
+    def evaluate(self, node):
+        if node.is_terminal():
+            if node.player_score > node.ai_score:
+                return -math.inf
+            elif node.ai_score > node.player_score:
+                return math.inf
+            else:
+                return 0
+        
+        score_diff = node.ai_score - node.player_score
+        remaining_moves = len(node.chain)
+        return score_diff * (1 + 0.1 * remaining_moves)
+
+class GameGUI:
+    def __init__(self):
+        self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.FULLSCREEN)
+        pygame.display.set_caption("Number Chain Game")
+        self.clock = pygame.time.Clock()
+        
+        # Game states
+        self.show_rules = True
+        self.show_length_input = False
+        self.show_start_choice = False
+        self.show_game = False
+        
+        # Game data
+        self.chain = []
+        self.chain_elements = []
+        self.user_score = 80
+        self.computer_score = 80
+        self.current_player = "user"
+        self.game_over = False
+        self.chain_length = 0
+        self.input_text = ""
+        self.input_active = False
+        
+        # UI elements
+        self.buttons = []
+        self.create_ui_elements()
+        
+        # AI player
+        self.ai = AIPlayer()
+        
+    def create_ui_elements(self):
+        # Start game button
+        self.buttons.append(Button(
+            SCREEN_WIDTH//2 - 150, SCREEN_HEIGHT - 150, 300, 60, 
+            "Start Game", self.start_game
+        ))
+        
+        # New game button
+        self.buttons.append(Button(
+            SCREEN_WIDTH//2 - 150, SCREEN_HEIGHT - 100, 300, 60, 
+            "New Game", self.prepare_new_game
+        ))
+        
+        # Submit length button
+        self.buttons.append(Button(
+            SCREEN_WIDTH//2 - 100, SCREEN_HEIGHT//2 + 100, 200, 50, 
+            "Submit", self.submit_length
+        ))
+        
+        # Start choice buttons
+        self.buttons.append(Button(
+            SCREEN_WIDTH//2 - 300, SCREEN_HEIGHT//2 + 50, 250, 60,
+            "I Start", self.set_player_starts
+        ))
+        self.buttons.append(Button(
+            SCREEN_WIDTH//2 + 50, SCREEN_HEIGHT//2 + 50, 250, 60,
+            "AI Starts", self.set_ai_starts
+        ))
+        self.buttons.append(Button(
+            SCREEN_WIDTH//2 - 125, SCREEN_HEIGHT//2 + 150, 250, 60,
+            "Random Choice", self.set_random_starts
+        ))
+    
+    def start_game(self):
+        self.show_rules = False
+        self.show_length_input = True
+        self.input_active = True
+        self.input_text = ""
+    
+    def prepare_new_game(self):
+        self.show_game = False
+        self.show_length_input = True
+        self.input_active = True
+        self.input_text = ""
+    
+    def submit_length(self):
+        try:
+            length = int(self.input_text)
+            if 15 <= length <= 25:
+                self.chain_length = length
+                self.show_length_input = False
+                self.show_start_choice = True
+            else:
+                self.input_text = "Must be 15-25"
+        except ValueError:
+            self.input_text = "Enter a number"
+    
+    def set_player_starts(self):
+        self.current_player = "user"
+        self.show_start_choice = False
+        self.show_game = True
+        self.start_new_game()
+    
+    def set_ai_starts(self):
+        self.current_player = "ai"
+        self.show_start_choice = False
+        self.show_game = True
+        self.start_new_game()
+    
+    def set_random_starts(self):
+        self.current_player = random.choice(["user", "ai"])
+        self.show_start_choice = False
+        self.show_game = True
+        self.start_new_game()
+    
+    def start_new_game(self):
+        self.chain = [random.randint(1, 3) for _ in range(self.chain_length)]
+        self.user_score = 80
+        self.computer_score = 80
+        self.game_over = False
+        self.update_chain_elements()
+        
+        if self.current_player == "ai":
+            self.ai_move()
+    
+    def update_chain_elements(self):
+        self.chain_elements = []
+        start_x = (SCREEN_WIDTH - (len(self.chain) * 70)) // 2
+        y = SCREEN_HEIGHT // 2 - 50
+        
+        for i, num in enumerate(self.chain):
+            x = start_x + i * 70
+            self.chain_elements.append(ChainElement(num, x, y))
+    
+    def draw_rules_screen(self):
+        self.screen.fill(BG_COLOR)
+        
+        # Title
+        title_surf = TITLE_FONT.render("Number Chain Game Rules", True, TEXT_COLOR)
+        title_rect = title_surf.get_rect(center=(SCREEN_WIDTH//2, 100))
+        self.screen.blit(title_surf, title_rect)
+        
+        # Rules text
+        rules = [
+            "1. Choose chain length (15-25 numbers)",
+            "2. Game generates random chain (numbers 1-3)",
+            "3. Both players start with 80 points",
+            "4. Take turns removing one number",
+            "5. Number value subtracted from your score",
+            "6. Game ends when chain is empty",
+            "7. Higher score wins! (Draw if equal)",
+            "8. Advice for Beginners: Remove small numbers.",
+            "9. Have Fun!"
+        ]
+        
+        for i, rule in enumerate(rules):
+            rule_surf = RULES_FONT.render(rule, True, TEXT_COLOR)
+            self.screen.blit(rule_surf, (100, 200 + i * 50))
+        
+        # Draw start button
+        for button in self.buttons:
+            if button.text == "Start Game":
+                button.draw(self.screen)
+        
+        pygame.display.flip()
+    
+    def draw_length_input(self):
+        self.screen.fill(BG_COLOR)
+        
+        # Title
+        title_surf = TITLE_FONT.render("Enter Chain Length", True, TEXT_COLOR)
+        title_rect = title_surf.get_rect(center=(SCREEN_WIDTH//2, 200))
+        self.screen.blit(title_surf, title_rect)
+        
+        # Instruction
+        instr_surf = MAIN_FONT.render("Enter a number between 15 and 25:", True, TEXT_COLOR)
+        instr_rect = instr_surf.get_rect(center=(SCREEN_WIDTH//2, 300))
+        self.screen.blit(instr_surf, instr_rect)
+        
+        # Input box
+        input_box = pygame.Rect(SCREEN_WIDTH//2 - 150, 350, 300, 50)
+        pygame.draw.rect(self.screen, (255, 255, 255), input_box, border_radius=5)
+        pygame.draw.rect(self.screen, CHAIN_COLOR, input_box, 2, border_radius=5)
+        
+        # Input text
+        text_surf = MAIN_FONT.render(self.input_text, True, TEXT_COLOR)
+        text_rect = text_surf.get_rect(center=input_box.center)
+        self.screen.blit(text_surf, text_rect)
+        
+        # Draw submit button
+        for button in self.buttons:
+            if button.text == "Submit":
+                button.draw(self.screen)
+        
+        pygame.display.flip()
+    
+    def draw_start_choice(self):
+        self.screen.fill(BG_COLOR)
+        
+        # Title
+        title_surf = TITLE_FONT.render("Who Starts First?", True, TEXT_COLOR)
+        title_rect = title_surf.get_rect(center=(SCREEN_WIDTH//2, 200))
+        self.screen.blit(title_surf, title_rect)
+        
+        # Draw choice buttons
+        for button in self.buttons:
+            if button.text in ["I Start", "AI Starts", "Random Choice"]:
+                button.draw(self.screen)
+        
+        pygame.display.flip()
+    
+    def draw_game_screen(self):
+        self.screen.fill(BG_COLOR)
+        
+        # Scores
+        user_score_text = MAIN_FONT.render(f"Your Score: {self.user_score}", True, PLAYER_COLORS[0])
+        ai_score_text = MAIN_FONT.render(f"AI Score: {self.computer_score}", True, PLAYER_COLORS[1])
+        self.screen.blit(user_score_text, (50, 50))
+        self.screen.blit(ai_score_text, (SCREEN_WIDTH - 250, 50))
+        
+        # Current turn
+        turn_text = MAIN_FONT.render(
+            f"Current Turn: {'You' if self.current_player == 'user' else 'AI'}",
+            True, 
+            PLAYER_COLORS[0] if self.current_player == 'user' else PLAYER_COLORS[1]
+        )
+        turn_rect = turn_text.get_rect(center=(SCREEN_WIDTH//2, 50))
+        self.screen.blit(turn_text, turn_rect)
+        
+        # Chain elements
+        for element in self.chain_elements:
+            element.draw(self.screen)
+        
+        # Game over message
+        if self.game_over:
+            if self.user_score > self.computer_score:
+                result_text = "You Win!"
+                color = PLAYER_COLORS[0]
+            elif self.computer_score > self.user_score:
+                result_text = "AI Wins!"
+                color = PLAYER_COLORS[1]
+            else:
+                result_text = "It's a Draw!"
+                color = TEXT_COLOR
+            
+            game_over_surf = TITLE_FONT.render(result_text, True, color)
+            game_over_rect = game_over_surf.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 + 100))
+            self.screen.blit(game_over_surf, game_over_rect)
+        
+        # New game button
+        for button in self.buttons:
+            if button.text == "New Game":
+                button.draw(self.screen)
+        
+        pygame.display.flip()
+    
+    def handle_events(self):
+        mouse_pos = pygame.mouse.get_pos()
+        
+        for event in pygame.event.get():
+            if event.type == QUIT:
+                pygame.quit()
+                sys.exit()
+            
+            # Handle keyboard input
+            if self.show_length_input and self.input_active:
+                if event.type == KEYDOWN:
+                    if event.key == K_RETURN:
+                        self.submit_length()
+                    elif event.key == K_BACKSPACE:
+                        self.input_text = self.input_text[:-1]
+                    elif event.unicode.isdigit():
+                        self.input_text += event.unicode
+            
+            # Handle mouse clicks
+            if event.type == MOUSEBUTTONDOWN:
+                # Check buttons
+                for button in self.buttons:
+                    button.check_hover(mouse_pos)
+                    button.handle_event(event)
+                
+                # Check chain elements
+                if self.show_game and self.current_player == "user" and not self.game_over:
+                    for i, element in enumerate(self.chain_elements):
+                        if element.check_hover(mouse_pos):
+                            self.handle_player_move(i)
+                            break
+            
+            # Handle ESC key
+            if event.type == KEYDOWN and event.key == K_ESCAPE:
+                pygame.quit()
+                sys.exit()
+    
+    def handle_player_move(self, position):
+        removed_value = self.chain[position]
+        self.user_score -= removed_value
+        del self.chain[position]
+        self.update_chain_elements()
+        
+        if len(self.chain) == 0:
+            self.game_over = True
+        else:
+            self.current_player = "ai"
+            self.ai_move()
+    
+    def ai_move(self):
+        if len(self.chain) == 0:
+            self.game_over = True
+            return
+            
+        position = self.ai.get_move(self.chain, self.user_score, self.computer_score)
+        
+        # Animate AI move
+        self.chain_elements[position].is_selected = True
+        self.draw_game_screen()
+        pygame.time.delay(500)
+        
+        removed_value = self.chain[position]
+        self.computer_score -= removed_value
+        del self.chain[position]
+        self.update_chain_elements()
+        
+        if len(self.chain) == 0:
+            self.game_over = True
+        else:
+            self.current_player = "user"
+    
+    def run(self):
+        while True:
+            self.handle_events()
+            
+            if self.show_rules:
+                self.draw_rules_screen()
+            elif self.show_length_input:
+                self.draw_length_input()
+            elif self.show_start_choice:
+                self.draw_start_choice()
+            elif self.show_game:
+                self.draw_game_screen()
+            
+            self.clock.tick(60)
+
+if __name__ == "__main__":
+    game = GameGUI()
+    game.run()
