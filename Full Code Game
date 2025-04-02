@@ -1,3 +1,5 @@
+//to run the code, need to install Pygame Library
+
 import pygame
 import sys
 import random
