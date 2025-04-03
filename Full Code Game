@@ -20,48 +20,13 @@ BUTTON_COLOR = (70, 130, 180)
 BUTTON_HOVER_COLOR = (100, 150, 200)
 CHAIN_COLOR = (70, 70, 70)
 PLAYER_COLORS = [(220, 60, 60), (60, 120, 220)]  # User, AI
+SETTINGS_COLOR = (100, 100, 100)
 
 # Fonts
 TITLE_FONT = pygame.font.SysFont('Arial', 50, bold=True)
 MAIN_FONT = pygame.font.SysFont('Arial', 36)
 SMALL_FONT = pygame.font.SysFont('Arial', 28)
 RULES_FONT = pygame.font.SysFont('Arial', 32)
-
-# Game Tree Implementation
-class GameTreeNode:
-    def __init__(self, chain, player_score, ai_score, is_maximizing, move=None, parent=None):
-        self.chain = chain.copy()
-        self.player_score = player_score
-        self.ai_score = ai_score
-        self.is_maximizing = is_maximizing
-        self.move = move
-        self.parent = parent
-        self.children = []
-        self.value = None
-        
-    def add_child(self, child_node):
-        self.children.append(child_node)
-        
-    def is_terminal(self):
-        return len(self.chain) == 0
-
-class GameTree:
-    def __init__(self, root_node):
-        self.root = root_node
-        self.current_node = root_node
-        self.nodes = [root_node]
-    
-    def add_node(self, node, parent=None):
-        if parent is None:
-            parent = self.current_node
-        parent.add_child(node)
-        node.parent = parent
-        self.nodes.append(node)
-        return node
-    
-    def prune_tree(self, keep_depth=3):
-        if len(self.nodes) > keep_depth * 20:
-            self.nodes = self.nodes[-keep_depth * 10:]
 
 class Button:
     def __init__(self, x, y, width, height, text, action=None):
@@ -109,100 +74,120 @@ class ChainElement:
 class AIPlayer:
     def __init__(self):
         self.nodes_evaluated = 0
-        self.game_tree = None
-
-    def get_winning_path(self, node):
-        """Reconstructs the sequence of moves from root to the given node"""
-        path = []
-        current = node
-        while current.parent is not None:  # Walk back to root
-            path.append({
-                'move': current.move,
-                'chain': current.chain.copy(),
-                'ai_score': current.ai_score,
-                'player_score': current.player_score
-            })
-            current = current.parent
-        path.reverse()  # Return root-to-leaf order
-        return path
+        self.use_alpha_beta = True  # Default to Alpha-Beta
+        self.root_node = None  # For tracking the game tree
     
     def get_move(self, chain, user_score, ai_score):
+        """Get the AI's move using the selected algorithm"""
         start_time = time.time()
         self.nodes_evaluated = 0
         
-        root_node = GameTreeNode(chain, user_score, ai_score, True)
-        self.game_tree = GameTree(root_node)
+        remaining_moves = len(chain)
+        depth = min(6, remaining_moves)  # Search depth
         
-        depth = min(6, len(chain))
-        _, best_move = self.minimax(root_node, depth, -math.inf, math.inf, True)
-        
-        self.game_tree.prune_tree()
+        if self.use_alpha_beta:
+            _, best_move = self.minimax(chain, user_score, ai_score, depth, -math.inf, math.inf, True)
+        else:
+            _, best_move = self.minimax(chain, user_score, ai_score, depth, None, None, True)
         
         end_time = time.time()
         print(f"AI evaluated {self.nodes_evaluated} nodes in {end_time - start_time:.2f} seconds")
         return best_move if best_move is not None else random.randint(0, len(chain)-1)
     
-    def minimax(self, node, depth, alpha, beta, maximizing_player):
+    def minimax(self, chain, user_score, ai_score, depth, alpha, beta, maximizing_player):
+        """Minimax algorithm with optional alpha-beta pruning"""
         self.nodes_evaluated += 1
         
-        if depth == 0 or node.is_terminal():
-            node.value = self.evaluate(node)
-            return node.value, None
+        # Create node for path tracking
+        node = {
+            'chain': chain.copy(),
+            'player_score': user_score,
+            'ai_score': ai_score,
+            'move': None,
+            'parent': self.root_node
+        }
         
-        best_move = None
-        if maximizing_player:
+        # Terminal node or depth limit reached
+        if depth == 0 or len(chain) == 0:
+            return self.evaluate(chain, user_score, ai_score), None
+        
+        if maximizing_player:  # AI's turn (maximize)
             max_eval = -math.inf
-            for i in range(len(node.chain)):
-                new_chain = node.chain[:i] + node.chain[i+1:]
-                new_ai_score = node.ai_score - node.chain[i]
-                child = GameTreeNode(new_chain, node.player_score, new_ai_score, False, i, node)
-                self.game_tree.add_node(child)
+            best_move = None
+            
+            for i in range(len(chain)):
+                new_chain = chain[:i] + chain[i+1:]
+                new_ai_score = ai_score - chain[i]
                 
-                eval, _ = self.minimax(child, depth-1, alpha, beta, False)
+                node['move'] = i  # Track this move
+                
+                eval, _ = self.minimax(new_chain, user_score, new_ai_score, depth-1, alpha, beta, False)
                 
                 if eval > max_eval:
                     max_eval = eval
                     best_move = i
+                    # Update root node when we find a better move
+                    if depth == 6:  # Only track at top level for simplicity
+                        self.root_node = node
                 
-                alpha = max(alpha, eval)
-                if beta <= alpha:
-                    break
-            
-            node.value = max_eval
+                if self.use_alpha_beta:
+                    alpha = max(alpha, eval)
+                    if beta <= alpha:
+                        break  # Beta cutoff
+                    
             return max_eval, best_move
-        else:
+        else:  # Player's turn (minimize)
             min_eval = math.inf
-            for i in range(len(node.chain)):
-                new_chain = node.chain[:i] + node.chain[i+1:]
-                new_player_score = node.player_score - node.chain[i]
-                child = GameTreeNode(new_chain, new_player_score, node.ai_score, True, i, node)
-                self.game_tree.add_node(child)
+            best_move = None
+            
+            for i in range(len(chain)):
+                new_chain = chain[:i] + chain[i+1:]
+                new_user_score = user_score - chain[i]
                 
-                eval, _ = self.minimax(child, depth-1, alpha, beta, True)
+                node['move'] = i  # Track this move
+                
+                eval, _ = self.minimax(new_chain, new_user_score, ai_score, depth-1, alpha, beta, True)
                 
                 if eval < min_eval:
                     min_eval = eval
                     best_move = i
                 
-                beta = min(beta, eval)
-                if beta <= alpha:
-                    break
-            
-            node.value = min_eval
+                if self.use_alpha_beta:
+                    beta = min(beta, eval)
+                    if beta <= alpha:
+                        break  # Alpha cutoff
+                    
             return min_eval, best_move
     
-    def evaluate(self, node):
-        if node.is_terminal():
-            if node.player_score > node.ai_score:
-                return -math.inf
-            elif node.ai_score > node.player_score:
-                return math.inf
+    def evaluate(self, chain, user_score, ai_score):
+        """Heuristic evaluation function"""
+        if len(chain) == 0:  # Terminal state
+            if user_score > ai_score:
+                return -math.inf  # AI loses
+            elif ai_score > user_score:
+                return math.inf   # AI wins
             else:
-                return 0
+                return 0         # Draw
         
-        score_diff = node.ai_score - node.player_score
-        remaining_moves = len(node.chain)
+        # Score difference with adjustment for remaining moves
+        score_diff = ai_score - user_score
+        remaining_moves = len(chain)
         return score_diff * (1 + 0.1 * remaining_moves)
+    
+    def get_winning_path(self, node):
+        """Reconstructs the sequence of moves from root to the given node"""
+        path = []
+        current = node
+        while current is not None and 'parent' in current:  # Walk back to root
+            path.append({
+                'move': current['move'],
+                'chain': current['chain'].copy(),
+                'ai_score': current['ai_score'],
+                'player_score': current['player_score']
+            })
+            current = current['parent']
+        path.reverse()  # Return root-to-leaf order
+        return path
 
 class GameGUI:
     def __init__(self):
@@ -215,6 +200,7 @@ class GameGUI:
         self.show_length_input = False
         self.show_start_choice = False
         self.show_game = False
+        self.show_settings = False
         
         # Game data
         self.chain = []
@@ -229,6 +215,7 @@ class GameGUI:
         
         # UI elements
         self.buttons = []
+        self.settings_buttons = []
         self.create_ui_elements()
         
         # AI player
@@ -241,7 +228,7 @@ class GameGUI:
             "Start Game", self.start_game
         ))
         
-        # New game button
+        # New game button (for game screen)
         self.buttons.append(Button(
             SCREEN_WIDTH//2 - 150, SCREEN_HEIGHT - 100, 300, 60, 
             "New Game", self.prepare_new_game
@@ -266,6 +253,27 @@ class GameGUI:
             SCREEN_WIDTH//2 - 125, SCREEN_HEIGHT//2 + 150, 250, 60,
             "Random Choice", self.set_random_starts
         ))
+        
+        # Settings buttons
+        self.settings_buttons.append(Button(
+            SCREEN_WIDTH - 120, 20, 100, 40,
+            "Settings", self.toggle_settings
+        ))
+        self.settings_buttons.append(Button(
+            SCREEN_WIDTH//2 - 150, SCREEN_HEIGHT//2 - 50, 300, 60,
+            "Minimax", lambda: self.set_algorithm(False)
+        ))
+        self.settings_buttons.append(Button(
+            SCREEN_WIDTH//2 - 150, SCREEN_HEIGHT//2 + 50, 300, 60,
+            "Alpha-Beta", lambda: self.set_algorithm(True)
+        ))
+    
+    def set_algorithm(self, use_alpha_beta):
+        self.ai.use_alpha_beta = use_alpha_beta
+        self.show_settings = False
+    
+    def toggle_settings(self):
+        self.show_settings = not self.show_settings
     
     def start_game(self):
         self.show_rules = False
@@ -338,15 +346,13 @@ class GameGUI:
         
         # Rules text
         rules = [
-            "1. Choose chain length (15-25 numbers)",
-            "2. Game generates random chain (numbers 1-3)",
-            "3. Both players start with 80 points",
-            "4. Take turns removing one number",
-            "5. Number value subtracted from your score",
-            "6. Game ends when chain is empty",
-            "7. Higher score wins! (Draw if equal)",
-            "8. Advice for Beginners: Remove small numbers.",
-            "9. Have Fun!"
+            "1. At the start, you choose the length of the number chain (15-25).",
+            "2. The game generates a random chain of numbers (1-3).",
+            "3. You and the AI start with 80 points each.",
+            "4. Players take turns removing one number from the chain.",
+            "5. The value of the removed number is subtracted from your score.",
+            "6. The game ends when the chain is empty.",
+            "7. The player with the higher score wins!"
         ]
         
         for i, rule in enumerate(rules):
@@ -357,6 +363,40 @@ class GameGUI:
         for button in self.buttons:
             if button.text == "Start Game":
                 button.draw(self.screen)
+        
+        # Draw settings button
+        for button in self.settings_buttons:
+            if button.text == "Settings":
+                button.draw(self.screen)
+        
+        pygame.display.flip()
+    
+    def draw_settings_screen(self):
+        # Semi-transparent overlay
+        overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 128))
+        self.screen.blit(overlay, (0, 0))
+        
+        # Settings panel
+        panel_rect = pygame.Rect(SCREEN_WIDTH//2 - 200, SCREEN_HEIGHT//2 - 150, 400, 300)
+        pygame.draw.rect(self.screen, BG_COLOR, panel_rect, border_radius=10)
+        pygame.draw.rect(self.screen, (200, 200, 200), panel_rect, 2, border_radius=10)
+        
+        # Title
+        title_surf = TITLE_FONT.render("AI Algorithm", True, TEXT_COLOR)
+        title_rect = title_surf.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 - 100))
+        self.screen.blit(title_surf, title_rect)
+        
+        # Draw algorithm buttons
+        for button in self.settings_buttons:
+            if button.text in ["Minimax", "Alpha-Beta"]:
+                button.draw(self.screen)
+        
+        # Current selection indicator
+        current_algo = "Alpha-Beta" if self.ai.use_alpha_beta else "Minimax"
+        algo_surf = MAIN_FONT.render(f"Current: {current_algo}", True, TEXT_COLOR)
+        algo_rect = algo_surf.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 + 150))
+        self.screen.blit(algo_surf, algo_rect)
         
         pygame.display.flip()
     
@@ -458,7 +498,7 @@ class GameGUI:
                 pygame.quit()
                 sys.exit()
             
-            # Handle keyboard input
+            # Handle keyboard input for chain length
             if self.show_length_input and self.input_active:
                 if event.type == KEYDOWN:
                     if event.key == K_RETURN:
@@ -471,18 +511,18 @@ class GameGUI:
             # Handle mouse clicks
             if event.type == MOUSEBUTTONDOWN:
                 # Check buttons
-                for button in self.buttons:
+                for button in self.buttons + self.settings_buttons:
                     button.check_hover(mouse_pos)
                     button.handle_event(event)
                 
-                # Check chain elements
+                # Check chain elements (if in game and player's turn)
                 if self.show_game and self.current_player == "user" and not self.game_over:
                     for i, element in enumerate(self.chain_elements):
                         if element.check_hover(mouse_pos):
                             self.handle_player_move(i)
                             break
             
-            # Handle ESC key
+            # Handle ESC key to exit fullscreen
             if event.type == KEYDOWN and event.key == K_ESCAPE:
                 pygame.quit()
                 sys.exit()
@@ -509,7 +549,7 @@ class GameGUI:
         # Animate AI move
         self.chain_elements[position].is_selected = True
         self.draw_game_screen()
-        pygame.time.delay(500)
+        pygame.time.delay(500)  # Pause to show selection
         
         removed_value = self.chain[position]
         self.computer_score -= removed_value
@@ -533,6 +573,9 @@ class GameGUI:
                 self.draw_start_choice()
             elif self.show_game:
                 self.draw_game_screen()
+            
+            if self.show_settings:
+                self.draw_settings_screen()
             
             self.clock.tick(60)
 
