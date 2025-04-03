@@ -1,5 +1,3 @@
-//to run the code, need to install Pygame Library
-
 import pygame
 import sys
 import random
@@ -112,6 +110,21 @@ class AIPlayer:
     def __init__(self):
         self.nodes_evaluated = 0
         self.game_tree = None
+
+    def get_winning_path(self, node):
+        """Reconstructs the sequence of moves from root to the given node"""
+        path = []
+        current = node
+        while current.parent is not None:  # Walk back to root
+            path.append({
+                'move': current.move,
+                'chain': current.chain.copy(),
+                'ai_score': current.ai_score,
+                'player_score': current.player_score
+            })
+            current = current.parent
+        path.reverse()  # Return root-to-leaf order
+        return path
     
     def get_move(self, chain, user_score, ai_score):
         start_time = time.time()
